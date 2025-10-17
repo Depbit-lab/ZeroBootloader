@@ -14,7 +14,7 @@ LDFLAGS = -nostartfiles -nostdlib -Wl,--gc-sections -Tsamd21_boot.ld -Wl,-Map=$(
 
 SRC = startup_minimal.c \
       main.c protocol.c flash_ops.c crypto_ops.c \
-      usb_stubs.c
+      usb_stubs.c minimal_libc.c
 
 
 OBJ = $(SRC:.c=.o)
