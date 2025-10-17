@@ -915,25 +915,6 @@ static void usb_handle_interrupts(void) {
     usb_handle_in_endpoint();
 }
 
-static void usb_enable_clocks(void) {
-    REG_PM_AHBMASK |= PM_AHBMASK_USB;
-    REG_PM_APBBMASK |= PM_APBBMASK_USB;
-
-    gclk_wait_sync();
-    REG_GCLK_GENDIV = GCLK_GENDIV_ID(GCLK_GEN_USB) | GCLK_GENDIV_DIV(1);
-    gclk_wait_sync();
-    REG_GCLK_GENCTRL = GCLK_GENCTRL_ID(GCLK_GEN_USB) |
-                       GCLK_GENCTRL_SRC_DFLL48M |
-                       GCLK_GENCTRL_GENEN |
-                       GCLK_GENCTRL_IDC |
-                       GCLK_GENCTRL_RUNSTDBY;
-    gclk_wait_sync();
-    REG_GCLK_CLKCTRL = GCLK_CLKCTRL_ID(GCLK_CLKCTRL_ID_USB) |
-                       GCLK_CLKCTRL_GEN(GCLK_GEN_USB) |
-                       GCLK_CLKCTRL_CLKEN;
-    gclk_wait_sync();
-}
-
 static void usb_configure_pins(void) {
     REG_PORT_DIRCLR0 = (1u << 24) | (1u << 25);
     uint8_t pmux = REG_PORT_PMUX0[12];
@@ -966,9 +947,25 @@ static void usb_load_padcal(void) {
 }
 
 void usb_init(void) {
-    usb_enable_clocks();
+    /* Ensure the USB peripheral clocks are enabled on the AHB and APBB buses. */
+    REG_PM_AHBMASK |= PM_AHBMASK_USB;
+    REG_PM_APBBMASK |= PM_APBBMASK_USB;
+
+    /* Reconfigure the generic clock for the USB peripheral (GCLK ID 3). */
+    gclk_wait_sync();
+    REG_GCLK_CLKCTRL = GCLK_CLKCTRL_ID(GCLK_CLKCTRL_ID_USB);
+    gclk_wait_sync();
+    REG_GCLK_CLKCTRL = GCLK_CLKCTRL_ID(GCLK_CLKCTRL_ID_USB) |
+                       GCLK_CLKCTRL_GEN(GCLK_GEN_USB);
+    gclk_wait_sync();
+    REG_GCLK_CLKCTRL = GCLK_CLKCTRL_ID(GCLK_CLKCTRL_ID_USB) |
+                       GCLK_CLKCTRL_GEN(GCLK_GEN_USB) |
+                       GCLK_CLKCTRL_CLKEN;
+    gclk_wait_sync();
+
     usb_configure_pins();
 
+    /* Perform a soft reset of the USB peripheral to guarantee a clean state. */
     USB_DEVICE->CTRLA = USB_CTRLA_SWRST;
     usb_wait_syncbusy();
     USB_DEVICE->CTRLA = 0;
