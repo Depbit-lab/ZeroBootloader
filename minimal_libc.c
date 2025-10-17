@@ -275,3 +275,104 @@ int snprintf(char *str, size_t size, const char *format, ...)
     return written;
 }
 
+/*
+ * Minimal implementations of the ARM EABI unsigned and signed division
+ * helpers.  Newer versions of arm-none-eabi-gcc emit calls to these helper
+ * routines when dividing without using the full compiler runtime.  Provide
+ * tiny replacements so we can link successfully without dragging in the
+ * standard library.
+ */
+
+struct __aeabi_uidivmod_result {
+    unsigned quotient;
+    unsigned remainder;
+};
+
+struct __aeabi_idivmod_result {
+    int quotient;
+    int remainder;
+};
+
+static unsigned udivmod_impl(unsigned numerator, unsigned denominator, unsigned *remainder_out)
+{
+    if (denominator == 0) {
+        if (remainder_out) {
+            *remainder_out = numerator;
+        }
+        return 0;
+    }
+
+    unsigned long long denom = denominator;
+    unsigned long long rem = numerator;
+    unsigned quotient = 0;
+    int shift = 0;
+
+    while ((denom << 1) != 0 && (denom << 1) <= rem) {
+        denom <<= 1;
+        shift++;
+    }
+
+    for (; shift >= 0; shift--) {
+        if (rem >= denom) {
+            rem -= denom;
+            quotient |= (unsigned)(1u << shift);
+        }
+        denom >>= 1;
+    }
+
+    if (remainder_out) {
+        *remainder_out = (unsigned)rem;
+    }
+
+    return quotient;
+}
+
+unsigned __aeabi_uidiv(unsigned numerator, unsigned denominator)
+{
+    return udivmod_impl(numerator, denominator, NULL);
+}
+
+struct __aeabi_uidivmod_result __aeabi_uidivmod(unsigned numerator, unsigned denominator)
+{
+    struct __aeabi_uidivmod_result result;
+    result.quotient = udivmod_impl(numerator, denominator, &result.remainder);
+    return result;
+}
+
+static unsigned abs_unsigned(int value, int *negative)
+{
+    if (value < 0) {
+        *negative = !*negative;
+        return (unsigned)(-(value + 1)) + 1u; /* avoid UB on INT_MIN */
+    }
+    return (unsigned)value;
+}
+
+int __aeabi_idiv(int numerator, int denominator)
+{
+    int negative = 0;
+    unsigned un = abs_unsigned(numerator, &negative);
+    unsigned ud = abs_unsigned(denominator, &negative);
+    unsigned quotient = udivmod_impl(un, ud, NULL);
+    int result = (int)quotient;
+    return negative ? -result : result;
+}
+
+struct __aeabi_idivmod_result __aeabi_idivmod(int numerator, int denominator)
+{
+    struct __aeabi_idivmod_result result;
+    int negative = 0;
+    unsigned un = abs_unsigned(numerator, &negative);
+    unsigned ud = abs_unsigned(denominator, &negative);
+    unsigned remainder = 0;
+    unsigned quotient = udivmod_impl(un, ud, &remainder);
+    result.quotient = negative ? -(int)quotient : (int)quotient;
+
+    int remainder_sign = (denominator < 0) ? -1 : 1;
+    if (numerator < 0) {
+        remainder_sign = -remainder_sign;
+    }
+    result.remainder = (int)remainder * remainder_sign;
+    return result;
+}
+
