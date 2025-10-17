@@ -13,11 +13,42 @@
 #include <stddef.h>
 #include <string.h>
 
+/* ------------------------------------------------------------------------- */
+/* Minimal SAMD21 NVMCTRL register definitions                               */
+/* ------------------------------------------------------------------------- */
+
+/* Base address of the SAMD21 non-volatile memory controller */
+#define NVMCTRL_BASE            (0x41004000UL)
+
+/* Register access helpers */
+#define NVMCTRL_REG16(offset)   (*(volatile uint16_t *)((NVMCTRL_BASE) + (offset)))
+#define NVMCTRL_REG32(offset)   (*(volatile uint32_t *)((NVMCTRL_BASE) + (offset)))
+#define NVMCTRL_REG8(offset)    (*(volatile uint8_t  *)((NVMCTRL_BASE) + (offset)))
+
+/* Individual registers used by the bootloader */
+#define NVMCTRL_CTRLA_REG       NVMCTRL_REG16(0x00U)
+#define NVMCTRL_CTRLB_REG       NVMCTRL_REG16(0x04U)
+#define NVMCTRL_INTFLAG_REG     NVMCTRL_REG8(0x14U)
+#define NVMCTRL_ADDR_REG        NVMCTRL_REG32(0x1CU)
+
+/* Bit definitions */
+#define NVMCTRL_INTFLAG_READY   (1U << 0)
+
+#define NVMCTRL_CTRLB_RWS_Pos   1U
+#define NVMCTRL_CTRLB_RWS_Msk   (0xFU << NVMCTRL_CTRLB_RWS_Pos)
+#define NVMCTRL_CTRLB_MANW      (1U << 7)
+
+/* Command key and opcodes */
+#define NVMCTRL_CTRLA_CMDEX_KEY (0xA5U << 8)
+#define NVMCTRL_CTRLA_CMD_ER    0x02U
+#define NVMCTRL_CTRLA_CMD_PBC   0x44U
+#define NVMCTRL_CTRLA_CMD_WP    0x04U
+
 /* Low level helpers ------------------------------------------------------ */
 static inline void
 nvm_wait_ready(void)
 {
-    while (!NVMCTRL->INTFLAG.bit.READY) {
+    while ((NVMCTRL_INTFLAG_REG & NVMCTRL_INTFLAG_READY) == 0U) {
         /* Wait for command completion */
     }
 }
@@ -25,7 +56,7 @@ nvm_wait_ready(void)
 static inline void
 nvm_exec_cmd(uint16_t cmd)
 {
-    NVMCTRL->CTRLA.reg = NVMCTRL_CTRLA_CMDEX_KEY | cmd;
+    NVMCTRL_CTRLA_REG = NVMCTRL_CTRLA_CMDEX_KEY | cmd;
     nvm_wait_ready();
 }
 
@@ -35,8 +66,9 @@ flash_init(void)
     nvm_wait_ready();
 
     /* Enable manual write mode and configure wait states for 48 MHz */
-    NVMCTRL->CTRLB.bit.MANW = 1;
-    NVMCTRL->CTRLB.bit.RWS = 1;
+    NVMCTRL_CTRLB_REG |= NVMCTRL_CTRLB_MANW;
+    NVMCTRL_CTRLB_REG = (uint16_t)((NVMCTRL_CTRLB_REG & ~NVMCTRL_CTRLB_RWS_Msk) |
+                                   (1U << NVMCTRL_CTRLB_RWS_Pos));
     nvm_wait_ready();
 }
 
@@ -69,7 +101,7 @@ flash_erase_range(uint32_t addr, size_t len)
 
     while (row_addr < end_addr) {
         nvm_wait_ready();
-        NVMCTRL->ADDR.reg = row_addr / 2U;
+        NVMCTRL_ADDR_REG = row_addr / 2U;
         nvm_exec_cmd(NVMCTRL_CTRLA_CMD_ER);
         row_addr += FLASH_ROW_SIZE;
     }
@@ -101,7 +133,7 @@ flash_write(uint32_t addr, const uint8_t *data, size_t len)
             dest[i] = src[i];
         }
 
-        NVMCTRL->ADDR.reg = addr / 2U;
+        NVMCTRL_ADDR_REG = addr / 2U;
         nvm_exec_cmd(NVMCTRL_CTRLA_CMD_WP);
 
         addr += FLASH_PAGE_SIZE;
