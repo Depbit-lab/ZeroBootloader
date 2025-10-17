@@ -147,6 +147,18 @@ void *memset(void *dest, int value, size_t count)
     return dest;
 }
 
+void *memcpy(void *dest, const void *src, size_t count)
+{
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *s = (const unsigned char *)src;
+
+    for (size_t i = 0; i < count; i++) {
+        d[i] = s[i];
+    }
+
+    return dest;
+}
+
 static int append_char(char **buf, size_t *remaining, char c)
 {
     if (*remaining > 1) {
