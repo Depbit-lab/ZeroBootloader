@@ -1,146 +1,219 @@
-// --- Helpers mínimos sin CMSIS para Cortex-M0+ (SAMD21) ---
-#include <stdint.h>  // <- necesario para uint32_t
-
-#define SCB_VTOR   (*(volatile unsigned long *)0xE000ED08)
-static inline void __disable_irq(void){ __asm volatile ("cpsid i"); }
-static inline void __set_MSP(uint32_t topOfMainStack){
-  __asm volatile ("msr msp, %0" : : "r" (topOfMainStack) : );
-}
-// -----------------------------------------------------------
-
-
-
-/*
- * main.c - Custom bootloader for ATSAMD21G18A
- *
- * This file contains the top‑level bootloader entry point and ties
- * together the protocol parser, flash operations and cryptographic
- * verification. The code is intentionally lightweight and keeps all
- * global state in static variables to minimise RAM usage. Low level
- * functions such as USB initialisation, CDC serial handling and the
- * 1200 baud “touch” detection are left as stubs – these are highly
- * platform specific and must be implemented using the appropriate
- * SAMD21 USB library or ASF/Arduino core. See the documentation
- * referenced in the README for details on how opening a SAMD21
- * virtual serial port at 1200 bps forces the chip into bootloader
- * mode【247177836008116†L524-L532】.
- */
-
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+
 #include "protocol.h"
 #include "flash_ops.h"
 #include "crypto_ops.h"
 #include "boot_config.h"
 
-/* Forward declarations */
-static bool check_bootloader_entry(void);
-void jump_to_application(uint32_t app_addr);
+#define REG8(addr)   (*(volatile uint8_t *)(addr))
+#define REG16(addr)  (*(volatile uint16_t *)(addr))
+#define REG32(addr)  (*(volatile uint32_t *)(addr))
 
-/* USB CDC stub API.  These are minimal prototypes for sending and
- * receiving bytes over the virtual serial port.  In a real
- * implementation these functions must call into the SAMD21 USB stack
- * and handle buffering, endpoint servicing and timeouts.  See
- * Microchip’s ASF or the Arduino core for examples. */
+#define PM_BASE                 (0x40000400u)
+#define GCLK_BASE               (0x40000C00u)
+#define OSCCTRL_BASE            (0x40001000u)
+#define NVMCTRL_BASE            (0x41004000u)
+#define NVMCTRL_OTP4            (0x00806020u)
+#define NVMCTRL_OTP5            (0x00806024u)
+
+#define PM_CTRL                 REG8(PM_BASE + 0x00u)
+#define PM_CPUSEL               REG8(PM_BASE + 0x08u)
+
+#define GCLK_CTRL               REG8(GCLK_BASE + 0x00u)
+#define GCLK_STATUS             REG8(GCLK_BASE + 0x01u)
+#define GCLK_CLKCTRL            REG16(GCLK_BASE + 0x02u)
+#define GCLK_GENCTRL            REG32(GCLK_BASE + 0x04u)
+#define GCLK_GENDIV             REG32(GCLK_BASE + 0x08u)
+
+#define GCLK_STATUS_SYNCBUSY    (1u << 7)
+#define GCLK_CTRL_SWRST         (1u << 0)
+
+#define GCLK_GENDIV_ID(v)       ((uint32_t)(v) & 0xFu)
+#define GCLK_GENDIV_DIV(v)      ((uint32_t)(v) << 8)
+
+#define GCLK_GENCTRL_ID(v)      ((uint32_t)(v) & 0xFu)
+#define GCLK_GENCTRL_SRC(v)     ((uint32_t)(v) << 8)
+#define GCLK_GENCTRL_GENEN      (1u << 16)
+#define GCLK_GENCTRL_RUNSTDBY   (1u << 21)
+
+#define GCLK_CLKCTRL_ID(v)      ((uint16_t)(v) & 0x3Fu)
+#define GCLK_CLKCTRL_GEN(v)     ((uint16_t)(v) << 8)
+#define GCLK_CLKCTRL_CLKEN      (1u << 14)
+
+#define GCLK_SRC_XOSC32K        (0x5u)
+#define GCLK_SRC_DFLL48M        (0x6u)
+
+#define GCLK_GEN_GCLK0          (0u)
+#define GCLK_GEN_GCLK1          (1u)
+
+#define GCLK_ID_DFLL48          (0u)
+
+#define OSCCTRL_PCLKSR          REG32(OSCCTRL_BASE + 0x0Cu)
+#define OSCCTRL_XOSC32K         REG32(OSCCTRL_BASE + 0x14u)
+#define OSCCTRL_DFLLCTRL        REG16(OSCCTRL_BASE + 0x24u)
+#define OSCCTRL_DFLLVAL         REG32(OSCCTRL_BASE + 0x2Cu)
+#define OSCCTRL_DFLLMUL         REG32(OSCCTRL_BASE + 0x28u)
+
+#define OSCCTRL_PCLKSR_XOSC32KRDY   (1u << 1)
+#define OSCCTRL_PCLKSR_DFLLRDY      (1u << 4)
+#define OSCCTRL_PCLKSR_DFLLLCKF     (1u << 5)
+#define OSCCTRL_PCLKSR_DFLLLCKC     (1u << 6)
+
+#define OSCCTRL_XOSC32K_ENABLE     (1u << 1)
+#define OSCCTRL_XOSC32K_XTALEN     (1u << 2)
+#define OSCCTRL_XOSC32K_EN32K      (1u << 3)
+#define OSCCTRL_XOSC32K_STARTUP(v) ((uint32_t)(v) << 8)
+
+#define OSCCTRL_DFLLCTRL_ENABLE    (1u << 1)
+#define OSCCTRL_DFLLCTRL_MODE      (1u << 2)
+#define OSCCTRL_DFLLCTRL_WAITLOCK  (1u << 7)
+#define OSCCTRL_DFLLCTRL_CCDIS     (1u << 8)
+#define OSCCTRL_DFLLCTRL_BPLCKC    (1u << 10)
+
+#define NVMCTRL_CTRLB             REG16(NVMCTRL_BASE + 0x04u)
+#define NVMCTRL_CTRLB_RWS(v)      ((uint16_t)(v) & 0xFu)
+
+#define SCB_VTOR   (*(volatile unsigned long *)0xE000ED08)
+
+static inline void __disable_irq(void) { __asm volatile ("cpsid i"); }
+static inline void __set_MSP(uint32_t topOfMainStack) {
+    __asm volatile ("msr msp, %0" : : "r" (topOfMainStack) : );
+}
+
 void usb_init(void);
 void usb_task(void);
-int  usb_cdc_getchar(void);        /* returns next byte or -1 if none */
+int usb_cdc_getchar(void);
 void usb_cdc_write(const uint8_t *data, size_t len);
 extern uint32_t usb_cdc_get_baud(void);
 
-/*
- * Check whether the bootloader should remain active.  The typical
- * SAMD21 bootloaders can be triggered by rapidly double tapping the
- * reset button or by opening the USB serial port at 1200 bps and
- * closing it again【247177836008116†L524-L532】.  This stub always returns
- * true when there is no valid application present.  Platforms that
- * support a 1200 baud touch should implement the detection here.
- */
+static bool check_bootloader_entry(void);
+void jump_to_application(uint32_t app_addr);
+
+static void
+system_clock_init_arduino_zero(void)
+{
+    NVMCTRL_CTRLB = (NVMCTRL_CTRLB & ~0xFu) | NVMCTRL_CTRLB_RWS(1u);
+
+    PM_CPUSEL = 0u;
+
+    GCLK_CTRL = GCLK_CTRL_SWRST;
+    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
+    }
+
+    OSCCTRL_XOSC32K = OSCCTRL_XOSC32K_STARTUP(6u) |
+                      OSCCTRL_XOSC32K_XTALEN |
+                      OSCCTRL_XOSC32K_EN32K |
+                      OSCCTRL_XOSC32K_ENABLE;
+    while ((OSCCTRL_PCLKSR & OSCCTRL_PCLKSR_XOSC32KRDY) == 0u) {
+    }
+
+    GCLK_GENDIV = GCLK_GENDIV_ID(GCLK_GEN_GCLK1) | GCLK_GENDIV_DIV(1u);
+    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
+    }
+    GCLK_GENCTRL = GCLK_GENCTRL_ID(GCLK_GEN_GCLK1) |
+                   GCLK_GENCTRL_SRC(GCLK_SRC_XOSC32K) |
+                   GCLK_GENCTRL_GENEN;
+    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
+    }
+
+    GCLK_CLKCTRL = GCLK_CLKCTRL_ID(GCLK_ID_DFLL48) |
+                   GCLK_CLKCTRL_GEN(GCLK_GEN_GCLK1) |
+                   GCLK_CLKCTRL_CLKEN;
+    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
+    }
+
+    OSCCTRL_DFLLCTRL = 0u;
+    while ((OSCCTRL_PCLKSR & OSCCTRL_PCLKSR_DFLLRDY) == 0u) {
+    }
+
+    OSCCTRL_DFLLMUL = (31u << 26) | (511u << 16) | 1465u;
+    while ((OSCCTRL_PCLKSR & OSCCTRL_PCLKSR_DFLLRDY) == 0u) {
+    }
+
+    uint32_t coarse = (*(volatile uint32_t *)NVMCTRL_OTP4 >> 26) & 0x3Fu;
+    if (coarse == 0x3Fu) {
+        coarse = 0x1Fu;
+    }
+    uint32_t fine = (*(volatile uint32_t *)NVMCTRL_OTP5) & 0x3FFu;
+    OSCCTRL_DFLLVAL = (coarse << 26) | fine;
+    while ((OSCCTRL_PCLKSR & OSCCTRL_PCLKSR_DFLLRDY) == 0u) {
+    }
+
+    OSCCTRL_DFLLCTRL = OSCCTRL_DFLLCTRL_WAITLOCK |
+                       OSCCTRL_DFLLCTRL_BPLCKC |
+                       OSCCTRL_DFLLCTRL_CCDIS |
+                       OSCCTRL_DFLLCTRL_MODE |
+                       OSCCTRL_DFLLCTRL_ENABLE;
+
+    while (((OSCCTRL_PCLKSR & OSCCTRL_PCLKSR_DFLLLCKC) == 0u) ||
+           ((OSCCTRL_PCLKSR & OSCCTRL_PCLKSR_DFLLLCKF) == 0u)) {
+    }
+
+    GCLK_GENDIV = GCLK_GENDIV_ID(GCLK_GEN_GCLK0) | GCLK_GENDIV_DIV(1u);
+    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
+    }
+    GCLK_GENCTRL = GCLK_GENCTRL_ID(GCLK_GEN_GCLK0) |
+                   GCLK_GENCTRL_SRC(GCLK_SRC_DFLL48M) |
+                   GCLK_GENCTRL_GENEN |
+                   GCLK_GENCTRL_RUNSTDBY;
+    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
+    }
+}
+
 static bool
 check_bootloader_entry(void)
 {
-    /* Detect a 1200 baud "touch" from the host which signals that the
-     * bootloader should remain active regardless of application state. */
     if (usb_cdc_get_baud() == 1200U) {
         return true;
     }
 
-    /* Read a magic value written by flash_set_app_valid_flag().  If the
-     * value is present then an application has been successfully
-     * programmed and verified.  Otherwise the bootloader will stay
-     * resident.  In a real implementation you may also check the
-     * 1200 bps touch condition or a dedicated GPIO button. */
     const uint32_t *magic = (const uint32_t *)(APP_START_ADDRESS - 4);
     if (*magic != APP_VALID_MAGIC) {
-        return true; /* no valid app, stay in bootloader */
+        return true;
     }
 
     return false;
 }
 
-/*
- * Transfer control to the user application.  This function resets the
- * vector table offset, initialises the stack pointer from the
- * application’s first word and jumps to the application reset
- * handler.  All interrupts are disabled before the jump.  This
- * implementation is Cortex‑M0+ specific. */
 void
 jump_to_application(uint32_t app_addr)
 {
-    /* Ensure interrupts are disabled during the jump */
     __disable_irq();
-    /* Deinitialise peripherals here if necessary */
-    
-    /* Set the vector table to the application region */
+
     SCB_VTOR = app_addr;
-    /* Load the application’s initial stack pointer and entry point */
-    uint32_t sp  = *((uint32_t *)app_addr);
-    uint32_t pc  = *((uint32_t *)(app_addr + 4));
-    /* Set the MSP and jump */
+
+    uint32_t sp = *((uint32_t *)app_addr);
+    uint32_t pc = *((uint32_t *)(app_addr + 4));
+
     __set_MSP(sp);
+
     void (*app_reset_handler)(void) = (void (*)(void))pc;
     app_reset_handler();
-    /* Should never return */
+
     while (1) {
-        ;
     }
 }
 
-int main(void)
+int
+main(void)
 {
-    /* Initialise microcontroller clocks, WDT etc.  This is hardware
-     * specific and omitted here for brevity. */
+    system_clock_init_arduino_zero();
 
-    /* Decide whether to jump directly to the existing application or
-     * enter bootloader mode. */
     if (!check_bootloader_entry()) {
         jump_to_application(APP_START_ADDRESS);
     }
 
-    /* Initialise USB CDC.  When the SAMD21 enumerates it will
-     * appear as two COM ports – one for the bootloader and one for
-     * sketches.  The protocol parser runs on the bootloader port. */
     usb_init();
-    /* Configure the flash controller for manual write/erase.  flash_init()
-     * sets the necessary wait states and MANW bit but is left as a stub
-     * for this example. */
     flash_init();
-    /* Initialise protocol parser and cryptographic state */
     protocol_init();
 
-    /* Main bootloader loop.  This loop services the USB tasks and
-     * feeds incoming characters into the protocol parser. */
     for (;;) {
-        /* Keep the USB device stack alive */
         usb_task();
-        /* Pull a byte from the CDC RX buffer if available.  The
-         * parser operates on individual characters to minimise memory
-         * usage. */
         int c = usb_cdc_getchar();
         if (c >= 0) {
             protocol_process_char((uint8_t)c);
         }
-        /* Optionally add a timeout or watchdog refresh here. */
     }
 }
