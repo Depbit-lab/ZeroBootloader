@@ -11,6 +11,12 @@
 #include "crypto_ops.h"
 #include <string.h>
 
+#if defined(__GNUC__)
+#define UNUSED __attribute__((unused))
+#else
+#define UNUSED
+#endif
+
 /* -------------------------------------------------------------------------
  * 128-bit helper utilities
  * -------------------------------------------------------------------------
@@ -661,7 +667,7 @@ static void fe51_neg(fe51 *r, const fe51 *a)
     fe51_reduce(r);
 }
 
-static void fe51_cmov(fe51 *r, const fe51 *a, int flag)
+static void UNUSED fe51_cmov(fe51 *r, const fe51 *a, int flag)
 {
     uint64_t mask = (uint64_t)(-flag);
     for (int i = 0; i < 5; i++) {
@@ -791,11 +797,11 @@ static const fe51 SQRT_M1 = {{
     1718705420411056ULL, 234908883556509ULL, 2233514472574048ULL,
     2117202627021982ULL, 765476049583133ULL
 }};
-static const fe51 BASEPOINT_X = {{
+static const fe51 BASEPOINT_X UNUSED = {{
     1738742601995546ULL, 1146398526822698ULL, 2070867633025821ULL,
     562264141797630ULL, 587772402128613ULL
 }};
-static const fe51 BASEPOINT_Y = {{
+static const fe51 BASEPOINT_Y UNUSED = {{
     1801439850948184ULL, 1351079888211148ULL, 450359962737049ULL,
     900719925474099ULL, 1801439850948198ULL
 }};
