@@ -158,6 +158,26 @@ typedef struct {
 
 #define CDC_RX_BUFFER_SIZE         512u
 #define CDC_TX_BUFFER_SIZE         256u
+
+/*
+ * usb_cdc_get_baud() – Stub implementation
+ *
+ * The production bootloader inspects the baud rate requested by the host when
+ * opening the CDC ACM port to detect the "1200 baud touch" that triggers the
+ * bootloader to remain active.  The minimalist USB stack provided here does not
+ * implement the full CDC control request handling yet, so we merely expose a
+ * dummy function that reports a 0 baud rate.  This keeps the link step happy
+ * while clearly flagging to integrators that real handling is still required.
+ *
+ * Platforms that need 1200 baud touch support should replace this function
+ * with one that tracks the current line coding parameters (SET_LINE_CODING
+ * request) and returns the programmed bitrate.
+ */
+uint32_t
+usb_cdc_get_baud(void)
+{
+    return 0u;
+}
 #define CDC_RX_BUFFER_MASK         (CDC_RX_BUFFER_SIZE - 1u)
 #define CDC_TX_BUFFER_MASK         (CDC_TX_BUFFER_SIZE - 1u)
 
