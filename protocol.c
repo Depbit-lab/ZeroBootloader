@@ -20,6 +20,7 @@
 
 #include "protocol.h"
 #include "flash_ops.h"
+#include "boot_config.h"
 #include "crypto_ops.h"
 #include <string.h>
 #include <stdio.h>
@@ -151,9 +152,6 @@ handle_command(void)
          * define a fallback value when it is not provided via
          * compilation flags.  The default corresponds to a 16 KiB
          * bootloader region (0x0000–0x3FFF). */
-#ifndef APP_START_ADDRESS
-#define APP_START_ADDRESS 0x00004000UL
-#endif
         if (addr < APP_START_ADDRESS || (addr + length) > FLASH_SIZE) {
             send_str("ERR PARAM\n");
             return;
