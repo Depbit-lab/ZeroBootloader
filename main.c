@@ -47,6 +47,7 @@ void usb_init(void);
 void usb_task(void);
 int  usb_cdc_getchar(void);        /* returns next byte or -1 if none */
 void usb_cdc_write(const uint8_t *data, size_t len);
+extern uint32_t usb_cdc_get_baud(void);
 
 /*
  * Check whether the bootloader should remain active.  The typical
@@ -59,6 +60,12 @@ void usb_cdc_write(const uint8_t *data, size_t len);
 static bool
 check_bootloader_entry(void)
 {
+    /* Detect a 1200 baud "touch" from the host which signals that the
+     * bootloader should remain active regardless of application state. */
+    if (usb_cdc_get_baud() == 1200U) {
+        return true;
+    }
+
     /* Read a magic value written by flash_set_app_valid_flag().  If the
      * value is present then an application has been successfully
      * programmed and verified.  Otherwise the bootloader will stay
@@ -68,8 +75,7 @@ check_bootloader_entry(void)
     if (*magic != APP_VALID_MAGIC) {
         return true; /* no valid app, stay in bootloader */
     }
-    /* Optionally detect 1200 baud touch here and return true if it was
-     * triggered. */
+
     return false;
 }
 
