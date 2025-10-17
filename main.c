@@ -18,14 +18,13 @@
 #define NVMCTRL_OTP4            (0x00806020u)
 #define NVMCTRL_OTP5            (0x00806024u)
 
-#define PM_CTRL                 REG8(PM_BASE + 0x00u)
 #define PM_CPUSEL               REG8(PM_BASE + 0x08u)
 
 #define GCLK_CTRL               REG8(GCLK_BASE + 0x00u)
 #define GCLK_STATUS             REG8(GCLK_BASE + 0x01u)
-#define GCLK_CLKCTRL            REG16(GCLK_BASE + 0x02u)
-#define GCLK_GENCTRL            REG32(GCLK_BASE + 0x04u)
 #define GCLK_GENDIV             REG32(GCLK_BASE + 0x08u)
+#define GCLK_GENCTRL            REG32(GCLK_BASE + 0x04u)
+#define GCLK_CLKCTRL            REG16(GCLK_BASE + 0x02u)
 
 #define GCLK_STATUS_SYNCBUSY    (1u << 7)
 #define GCLK_CTRL_SWRST         (1u << 0)
@@ -42,13 +41,12 @@
 #define GCLK_CLKCTRL_GEN(v)     ((uint16_t)(v) << 8)
 #define GCLK_CLKCTRL_CLKEN      (1u << 14)
 
-#define GCLK_SRC_XOSC32K        (0x5u)
-#define GCLK_SRC_DFLL48M        (0x6u)
-
 #define GCLK_GEN_GCLK0          (0u)
 #define GCLK_GEN_GCLK1          (1u)
-
 #define GCLK_ID_DFLL48          (0u)
+
+#define GCLK_SRC_XOSC32K        (0x06u)
+#define GCLK_SRC_DFLL48M        (0x07u)
 
 #define OSCCTRL_PCLKSR          REG32(OSCCTRL_BASE + 0x0Cu)
 #define OSCCTRL_XOSC32K         REG32(OSCCTRL_BASE + 0x14u)
@@ -92,6 +90,20 @@ static bool check_bootloader_entry(void);
 void jump_to_application(uint32_t app_addr);
 
 static void
+wait_for_gclk_sync(void)
+{
+    while ((GCLK_STATUS & GCLK_STATUS_SYNCBUSY) != 0u) {
+    }
+}
+
+static void
+wait_for_dfll_ready(void)
+{
+    while ((OSCCTRL_PCLKSR & OSCCTRL_PCLKSR_DFLLRDY) == 0u) {
+    }
+}
+
+static void
 system_clock_init_arduino_zero(void)
 {
     NVMCTRL_CTRLB = (NVMCTRL_CTRLB & ~0xFu) | NVMCTRL_CTRLB_RWS(1u);
@@ -99,8 +111,7 @@ system_clock_init_arduino_zero(void)
     PM_CPUSEL = 0u;
 
     GCLK_CTRL = GCLK_CTRL_SWRST;
-    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
-    }
+    wait_for_gclk_sync();
 
     OSCCTRL_XOSC32K = OSCCTRL_XOSC32K_STARTUP(6u) |
                       OSCCTRL_XOSC32K_XTALEN |
@@ -110,36 +121,35 @@ system_clock_init_arduino_zero(void)
     }
 
     GCLK_GENDIV = GCLK_GENDIV_ID(GCLK_GEN_GCLK1) | GCLK_GENDIV_DIV(1u);
-    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
-    }
+    wait_for_gclk_sync();
+
     GCLK_GENCTRL = GCLK_GENCTRL_ID(GCLK_GEN_GCLK1) |
                    GCLK_GENCTRL_SRC(GCLK_SRC_XOSC32K) |
                    GCLK_GENCTRL_GENEN;
-    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
-    }
+    wait_for_gclk_sync();
 
     GCLK_CLKCTRL = GCLK_CLKCTRL_ID(GCLK_ID_DFLL48) |
                    GCLK_CLKCTRL_GEN(GCLK_GEN_GCLK1) |
                    GCLK_CLKCTRL_CLKEN;
-    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
-    }
+    wait_for_gclk_sync();
 
     OSCCTRL_DFLLCTRL = 0u;
-    while ((OSCCTRL_PCLKSR & OSCCTRL_PCLKSR_DFLLRDY) == 0u) {
-    }
+    wait_for_dfll_ready();
 
-    OSCCTRL_DFLLMUL = (31u << 26) | (511u << 16) | 1465u;
-    while ((OSCCTRL_PCLKSR & OSCCTRL_PCLKSR_DFLLRDY) == 0u) {
-    }
-
-    uint32_t coarse = (*(volatile uint32_t *)NVMCTRL_OTP4 >> 26) & 0x3Fu;
+    const uint32_t coarse_cal = (*(volatile uint32_t *)NVMCTRL_OTP4 >> 26) & 0x3Fu;
+    const uint32_t fine_cal = (*(volatile uint32_t *)NVMCTRL_OTP5) & 0x3FFu;
+    uint32_t coarse = coarse_cal;
     if (coarse == 0x3Fu) {
         coarse = 0x1Fu;
     }
-    uint32_t fine = (*(volatile uint32_t *)NVMCTRL_OTP5) & 0x3FFu;
+    const uint32_t fine = fine_cal;
+
     OSCCTRL_DFLLVAL = (coarse << 26) | fine;
-    while ((OSCCTRL_PCLKSR & OSCCTRL_PCLKSR_DFLLRDY) == 0u) {
-    }
+    wait_for_dfll_ready();
+
+    const uint32_t dfllmul = (31u << 26) | (511u << 16) | 1465u;
+    OSCCTRL_DFLLMUL = dfllmul;
+    wait_for_dfll_ready();
 
     OSCCTRL_DFLLCTRL = OSCCTRL_DFLLCTRL_WAITLOCK |
                        OSCCTRL_DFLLCTRL_BPLCKC |
@@ -152,14 +162,13 @@ system_clock_init_arduino_zero(void)
     }
 
     GCLK_GENDIV = GCLK_GENDIV_ID(GCLK_GEN_GCLK0) | GCLK_GENDIV_DIV(1u);
-    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
-    }
+    wait_for_gclk_sync();
+
     GCLK_GENCTRL = GCLK_GENCTRL_ID(GCLK_GEN_GCLK0) |
                    GCLK_GENCTRL_SRC(GCLK_SRC_DFLL48M) |
                    GCLK_GENCTRL_GENEN |
                    GCLK_GENCTRL_RUNSTDBY;
-    while (GCLK_STATUS & GCLK_STATUS_SYNCBUSY) {
-    }
+    wait_for_gclk_sync();
 }
 
 static bool
