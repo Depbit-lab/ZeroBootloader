@@ -11,6 +11,119 @@
 #include "crypto_ops.h"
 #include <string.h>
 
+/* -------------------------------------------------------------------------
+ * 128-bit helper utilities
+ * -------------------------------------------------------------------------
+ *
+ * The Ed25519 field arithmetic below uses 128-bit intermediates when
+ * available.  Some bare-metal toolchains (notably arm-none-eabi-gcc for
+ * Cortex-M0/M0+) do not provide the non-standard __uint128_t type, so we
+ * fall back to a tiny struct-based implementation when required.  The
+ * helper routines expose a minimal interface that mirrors the operations
+ * required by the finite-field routines (addition, multiplication, and
+ * small shifts), keeping the call sites readable while remaining fully
+ * portable.
+ */
+#if defined(__SIZEOF_INT128__)
+typedef __uint128_t fe_u128;
+
+static inline fe_u128
+fe_u128_add(fe_u128 a, fe_u128 b)
+{
+    return a + b;
+}
+
+static inline fe_u128
+fe_u128_add_u64(fe_u128 a, uint64_t b)
+{
+    return a + (fe_u128)b;
+}
+
+static inline fe_u128
+fe_u128_mul64(uint64_t a, uint64_t b)
+{
+    return (fe_u128)a * (fe_u128)b;
+}
+
+static inline uint64_t
+fe_u128_lo(fe_u128 a)
+{
+    return (uint64_t)a;
+}
+
+static inline uint64_t
+fe_u128_shr_u64(fe_u128 a, unsigned shift)
+{
+    return (uint64_t)(a >> shift);
+}
+#else
+typedef struct {
+    uint64_t lo;
+    uint64_t hi;
+} fe_u128;
+
+static inline fe_u128
+fe_u128_add(fe_u128 a, fe_u128 b)
+{
+    fe_u128 r;
+    r.lo = a.lo + b.lo;
+    r.hi = a.hi + b.hi + (r.lo < a.lo);
+    return r;
+}
+
+static inline fe_u128
+fe_u128_add_u64(fe_u128 a, uint64_t b)
+{
+    fe_u128 r;
+    r.lo = a.lo + b;
+    r.hi = a.hi + (r.lo < a.lo);
+    return r;
+}
+
+static inline fe_u128
+fe_u128_mul64(uint64_t a, uint64_t b)
+{
+    uint64_t alo = (uint32_t)a;
+    uint64_t ahi = a >> 32;
+    uint64_t blo = (uint32_t)b;
+    uint64_t bhi = b >> 32;
+
+    uint64_t lo = alo * blo;
+    uint64_t mid1 = alo * bhi;
+    uint64_t mid2 = ahi * blo;
+    uint64_t hi = ahi * bhi;
+
+    uint64_t mid = mid1 + mid2;
+    uint64_t mid_carry = (mid < mid1) ? 1ULL : 0ULL;
+    uint64_t lo_res = lo + (mid << 32);
+    uint64_t carry = (lo_res < lo) ? 1ULL : 0ULL;
+
+    fe_u128 r;
+    r.lo = lo_res;
+    r.hi = hi + (mid >> 32) + (mid_carry << 32) + carry;
+    return r;
+}
+
+static inline uint64_t
+fe_u128_lo(fe_u128 a)
+{
+    return a.lo;
+}
+
+static inline uint64_t
+fe_u128_shr_u64(fe_u128 a, unsigned shift)
+{
+    if (shift == 0) {
+        return a.lo;
+    } else if (shift < 64u) {
+        return (a.lo >> shift) | (a.hi << (64u - shift));
+    } else if (shift < 128u) {
+        return a.hi >> (shift - 64u);
+    }
+    return 0;
+}
+#endif
+
 /* Rotate right helper for 32-bit values */
 #define ROTR32(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
 
@@ -560,28 +673,47 @@ static void fe51_cmov(fe51 *r, const fe51 *a, int flag)
 
 static void fe51_mul(fe51 *r, const fe51 *a, const fe51 *b)
 {
-    __uint128_t t0 = (__uint128_t)a->v[0] * b->v[0] +
-                     19 * ((__uint128_t)a->v[1] * b->v[4] + (__uint128_t)a->v[2] * b->v[3] +
-                           (__uint128_t)a->v[3] * b->v[2] + (__uint128_t)a->v[4] * b->v[1]);
-    __uint128_t t1 = (__uint128_t)a->v[0] * b->v[1] + (__uint128_t)a->v[1] * b->v[0] +
-                     19 * ((__uint128_t)a->v[2] * b->v[4] + (__uint128_t)a->v[3] * b->v[3] +
-                           (__uint128_t)a->v[4] * b->v[2]);
-    __uint128_t t2 = (__uint128_t)a->v[0] * b->v[2] + (__uint128_t)a->v[1] * b->v[1] +
-                     (__uint128_t)a->v[2] * b->v[0] +
-                     19 * ((__uint128_t)a->v[3] * b->v[4] + (__uint128_t)a->v[4] * b->v[3]);
-    __uint128_t t3 = (__uint128_t)a->v[0] * b->v[3] + (__uint128_t)a->v[1] * b->v[2] +
-                     (__uint128_t)a->v[2] * b->v[1] + (__uint128_t)a->v[3] * b->v[0] +
-                     19 * (__uint128_t)a->v[4] * b->v[4];
-    __uint128_t t4 = (__uint128_t)a->v[0] * b->v[4] + (__uint128_t)a->v[1] * b->v[3] +
-                     (__uint128_t)a->v[2] * b->v[2] + (__uint128_t)a->v[3] * b->v[1] +
-                     (__uint128_t)a->v[4] * b->v[0];
+    uint64_t a1_19 = a->v[1] * 19ULL;
+    uint64_t a2_19 = a->v[2] * 19ULL;
+    uint64_t a3_19 = a->v[3] * 19ULL;
+    uint64_t a4_19 = a->v[4] * 19ULL;
 
-    r->v[0] = (uint64_t)t0 & FE51_MASK; t1 += t0 >> 51;
-    r->v[1] = (uint64_t)t1 & FE51_MASK; t2 += t1 >> 51;
-    r->v[2] = (uint64_t)t2 & FE51_MASK; t3 += t2 >> 51;
-    r->v[3] = (uint64_t)t3 & FE51_MASK; t4 += t3 >> 51;
-    r->v[4] = (uint64_t)t4 & FE51_MASK;
-    uint64_t carry = (uint64_t)(t4 >> 51);
+    fe_u128 t0 = fe_u128_mul64(a->v[0], b->v[0]);
+    t0 = fe_u128_add(t0, fe_u128_mul64(a1_19, b->v[4]));
+    t0 = fe_u128_add(t0, fe_u128_mul64(a2_19, b->v[3]));
+    t0 = fe_u128_add(t0, fe_u128_mul64(a3_19, b->v[2]));
+    t0 = fe_u128_add(t0, fe_u128_mul64(a4_19, b->v[1]));
+
+    fe_u128 t1 = fe_u128_mul64(a->v[0], b->v[1]);
+    t1 = fe_u128_add(t1, fe_u128_mul64(a->v[1], b->v[0]));
+    t1 = fe_u128_add(t1, fe_u128_mul64(a2_19, b->v[4]));
+    t1 = fe_u128_add(t1, fe_u128_mul64(a3_19, b->v[3]));
+    t1 = fe_u128_add(t1, fe_u128_mul64(a4_19, b->v[2]));
+
+    fe_u128 t2 = fe_u128_mul64(a->v[0], b->v[2]);
+    t2 = fe_u128_add(t2, fe_u128_mul64(a->v[1], b->v[1]));
+    t2 = fe_u128_add(t2, fe_u128_mul64(a->v[2], b->v[0]));
+    t2 = fe_u128_add(t2, fe_u128_mul64(a3_19, b->v[4]));
+    t2 = fe_u128_add(t2, fe_u128_mul64(a4_19, b->v[3]));
+
+    fe_u128 t3 = fe_u128_mul64(a->v[0], b->v[3]);
+    t3 = fe_u128_add(t3, fe_u128_mul64(a->v[1], b->v[2]));
+    t3 = fe_u128_add(t3, fe_u128_mul64(a->v[2], b->v[1]));
+    t3 = fe_u128_add(t3, fe_u128_mul64(a->v[3], b->v[0]));
+    t3 = fe_u128_add(t3, fe_u128_mul64(a4_19, b->v[4]));
+
+    fe_u128 t4 = fe_u128_mul64(a->v[0], b->v[4]);
+    t4 = fe_u128_add(t4, fe_u128_mul64(a->v[1], b->v[3]));
+    t4 = fe_u128_add(t4, fe_u128_mul64(a->v[2], b->v[2]));
+    t4 = fe_u128_add(t4, fe_u128_mul64(a->v[3], b->v[1]));
+    t4 = fe_u128_add(t4, fe_u128_mul64(a->v[4], b->v[0]));
+
+    r->v[0] = fe_u128_lo(t0) & FE51_MASK; t1 = fe_u128_add_u64(t1, fe_u128_shr_u64(t0, 51));
+    r->v[1] = fe_u128_lo(t1) & FE51_MASK; t2 = fe_u128_add_u64(t2, fe_u128_shr_u64(t1, 51));
+    r->v[2] = fe_u128_lo(t2) & FE51_MASK; t3 = fe_u128_add_u64(t3, fe_u128_shr_u64(t2, 51));
+    r->v[3] = fe_u128_lo(t3) & FE51_MASK; t4 = fe_u128_add_u64(t4, fe_u128_shr_u64(t3, 51));
+    r->v[4] = fe_u128_lo(t4) & FE51_MASK;
+    uint64_t carry = fe_u128_shr_u64(t4, 51);
     r->v[0] += carry * 19ULL;
     fe51_reduce(r);
 }
