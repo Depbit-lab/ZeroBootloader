@@ -32,13 +32,7 @@ static inline void __set_MSP(uint32_t topOfMainStack){
 #include "protocol.h"
 #include "flash_ops.h"
 #include "crypto_ops.h"
-
-/*
- * Address where the application firmware is expected to start.  On the
- * ATSAMD21G18A the bootloader occupies the first 16 KiB (0x0000 to
- * 0x3FFF), leaving the application region at 0x4000【247177836008116†L524-L532】.
- */
-#define APP_START_ADDRESS  0x00004000UL
+#include "boot_config.h"
 
 /* Forward declarations */
 static bool check_bootloader_entry(void);

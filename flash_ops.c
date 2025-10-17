@@ -12,6 +12,7 @@
  */
 
 #include "flash_ops.h"
+#include "boot_config.h"
 #include <stdint.h>
 #include <stddef.h>
 
