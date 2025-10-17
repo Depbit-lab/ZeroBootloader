@@ -11,18 +11,18 @@ CFLAGS  = -Os -mcpu=$(MCU) -mthumb -ffunction-sections -fdata-sections \
           -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables \
           -Wall -Wextra -Wno-unused-parameter
 LDFLAGS = -nostartfiles -nostdlib -Wl,--gc-sections -Tsamd21_boot.ld -Wl,-Map=$(TARGET).map
+LDLIBS  = -lgcc
 
 SRC = startup_minimal.c \
       main.c protocol.c flash_ops.c crypto_ops.c \
       usb_stubs.c minimal_libc.c
-
 
 OBJ = $(SRC:.c=.o)
 
 all: $(TARGET).bin
 
 $(TARGET).elf: $(OBJ) samd21_boot.ld
-	$(CC) $(CFLAGS) $(OBJ) -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) $(OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 	$(SIZE) $@
 
 $(TARGET).bin: $(TARGET).elf
