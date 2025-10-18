@@ -324,8 +324,13 @@ static const usb_device_descriptor_t device_descriptor = {
     .bDeviceSubClass = 0x00,
     .bDeviceProtocol = 0x00,
     .bMaxPacketSize0 = EP0_SIZE,
-    .idVendor = 0x239Au,       // VID arbitrario (Adafruit)
-    .idProduct = 0x000Bu,      // PID arbitrario
+    // Utilice el VID/PID oficial de Arduino para que el PC reconozca la placa
+    // como Arduino Zero.  La bootloader original SAM-BA utiliza VID 0x2341 y
+    // PID 0x004D【65468958460339†L320-L333】, definidos en boards.txt de Arduino【388880450623759†L124-L134】.  Con
+    // esta pareja el sistema operativo cargará los drivers correctos sin
+    // necesidad de archivos .inf adicionales.
+    .idVendor = 0x2341u,
+    .idProduct = 0x004Du,
     .bcdDevice = 0x0100,
     .iManufacturer = 1,
     .iProduct = 2,
