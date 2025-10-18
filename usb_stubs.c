@@ -535,6 +535,12 @@ usb_cdc_get_baud(void)
     return baud;
 }
 
+uint16_t
+usb_cdc_get_line_state(void)
+{
+    return usb_control_state.control_line_state;
+}
+
 static inline void usb_wait_syncbusy(void) {
     while (USB_DEVICE->SYNCBUSY) { }
 }
