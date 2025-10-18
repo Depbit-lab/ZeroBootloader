@@ -75,6 +75,18 @@
 
 #define SCB_VTOR   (*(volatile unsigned long *)0xE000ED08)
 
+#define SYSTICK_BASE            (0xE000E010u)
+#define SYST_CSR                (*(volatile uint32_t *)(SYSTICK_BASE + 0x00u))
+#define SYST_RVR                (*(volatile uint32_t *)(SYSTICK_BASE + 0x04u))
+#define SYST_CVR                (*(volatile uint32_t *)(SYSTICK_BASE + 0x08u))
+#define SYST_CSR_ENABLE         (1u << 0)
+#define SYST_CSR_CLKSOURCE      (1u << 2)
+#define SYST_CSR_COUNTFLAG      (1u << 16)
+
+#define SYSTICK_RELOAD_1MS      (48000u - 1u)
+
+#define CDC_LINESTATE_DTR       (1u << 0)
+
 static inline void __disable_irq(void) { __asm volatile ("cpsid i"); }
 static inline void __set_MSP(uint32_t topOfMainStack) {
     __asm volatile ("msr msp, %0" : : "r" (topOfMainStack) : );
@@ -85,9 +97,31 @@ void usb_task(void);
 int usb_cdc_getchar(void);
 void usb_cdc_write(const uint8_t *data, size_t len);
 extern uint32_t usb_cdc_get_baud(void);
+extern uint16_t usb_cdc_get_line_state(void);
 
 static bool check_bootloader_entry(void);
 void jump_to_application(uint32_t app_addr);
+
+static void
+delay_with_usb_poll(uint32_t ms)
+{
+    if (ms == 0u) {
+        return;
+    }
+
+    SYST_CSR = 0u;
+    SYST_RVR = SYSTICK_RELOAD_1MS;
+    SYST_CVR = 0u;
+    SYST_CSR = SYST_CSR_CLKSOURCE | SYST_CSR_ENABLE;
+
+    while (ms-- > 0u) {
+        while ((SYST_CSR & SYST_CSR_COUNTFLAG) == 0u) {
+            usb_task();
+        }
+    }
+
+    SYST_CSR = 0u;
+}
 
 static void
 wait_for_gclk_sync(void)
@@ -174,12 +208,15 @@ system_clock_init_arduino_zero(void)
 static bool
 check_bootloader_entry(void)
 {
-    if (usb_cdc_get_baud() == 1200U) {
+    const uint32_t *magic = (const uint32_t *)(APP_START_ADDRESS - 4);
+    if (*magic != APP_VALID_MAGIC) {
         return true;
     }
 
-    const uint32_t *magic = (const uint32_t *)(APP_START_ADDRESS - 4);
-    if (*magic != APP_VALID_MAGIC) {
+    uint32_t baud = usb_cdc_get_baud();
+    uint16_t line_state = usb_cdc_get_line_state();
+
+    if ((baud == 1200u) && ((line_state & CDC_LINESTATE_DTR) == 0u)) {
         return true;
     }
 
@@ -210,11 +247,13 @@ main(void)
 {
     system_clock_init_arduino_zero();
 
+    usb_init();
+    delay_with_usb_poll(50u);
+
     if (!check_bootloader_entry()) {
         jump_to_application(APP_START_ADDRESS);
     }
 
-    usb_init();
     flash_init();
     protocol_init();
 
