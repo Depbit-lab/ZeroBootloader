@@ -1,4 +1,4 @@
-# Makefile — Bootloader SAMD21G18A (Cortex-M0+), 16 KB
+# Makefile — Bootloader SAMD21G18A (Cortex-M0+), 8 KB
 
 TARGET  = samd21_bootloader
 MCU     = cortex-m0plus
