@@ -150,8 +150,8 @@ handle_command(void)
          * NOTE: APP_START_ADDRESS is defined in main.c.  To ensure
          * this file can compile independently (e.g. in unit tests),
          * define a fallback value when it is not provided via
-         * compilation flags.  The default corresponds to a 16 KiB
-         * bootloader region (0x0000–0x3FFF). */
+         * compilation flags.  The default corresponds to an 8 KiB
+         * bootloader region (0x0000–0x1FFF). */
         if (addr < APP_START_ADDRESS || (addr + length) > FLASH_SIZE) {
             send_str("ERR PARAM\n");
             return;

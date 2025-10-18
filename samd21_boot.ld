@@ -2,14 +2,14 @@
  * samd21_boot.ld - Minimal linker script for the ZeroBootloader build
  *
  * Targets the Microchip ATSAMD21G18A (Cortex-M0+). The bootloader
- * occupies the first 16 KiB of flash while the remaining flash is used
- * by the user application (starting at 0x00004000 as defined in
+ * occupies the first 8 KiB of flash while the remaining flash is used
+ * by the user application (starting at 0x00002000 as defined in
  * boot_config.h). SRAM is 32 KiB beginning at 0x20000000.
  */
 
 MEMORY
 {
-  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 16K
+  FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = 8K
   RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 32K
 }
 
